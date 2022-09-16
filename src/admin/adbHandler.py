@@ -14,7 +14,6 @@ class BaseAutoHandler():
 
     def link_device(self):
         if self.device_conn is not None:
-            from automator.control.adb.targets import get_target_from_adb_serial
-            self._controller = get_target_from_adb_serial(adb_serial).create_controller()
-
+            # from automator.control.adb.targets import get_target_from_adb_serial
+            # self._controller = get_target_from_adb_serial(adb_serial).create_controller()
             self.link_check()
