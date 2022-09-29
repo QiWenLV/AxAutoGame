@@ -1,5 +1,7 @@
 import logging
 
+from src.admin.utils import cvimage
+
 logger = logging.getLogger('link')
 
 
@@ -17,3 +19,5 @@ class BaseAutoHandler():
             # from automator.control.adb.targets import get_target_from_adb_serial
             # self._controller = get_target_from_adb_serial(adb_serial).create_controller()
             self.link_check()
+
+    # def screenshot(self, cached: bool = True) -> cvimage.Image:

@@ -1,7 +1,8 @@
+import json
+import logging
+
 from src.admin.common.base import Bean
 from ..common.config_enum import *
-from enum import Enum
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -31,27 +32,43 @@ class BaseSetting:
             app = self.currApp
         if group is None:
             group = self.currGroup
-        rstGroup = self.setting.get(app).get(group)
+        rstGroup: Group= self.setting.get(app).get(group)
         if rstGroup is None:
             logging.error("当前" + app.name + "没有" + group + "组")
             return None
         else:
-            return rstGroup.get(key)
+            item: Member = rstGroup.members.get(key)
+            return item.value
 
 
-class Member(Bean):
-    __slots__ = ('key', 'value', 'default_value')
+class Member:
 
-    def __init__(self, **kwargs):
-        super(Member, self).__init__(**kwargs)
+    def __init__(self, item: dict):
+        self.key = item['key']
+        self.title = item['title']
+        self.value = item['value']
+        self.default_value = item['default_value']
+        self.desc = item['desc']
+        self.value_type = item['value_type']
+        self.properties = item['properties']
+
+    def set_options(self, arr):
+        self.options = arr
+        return self
 
 
-class Group(Bean):
-    __slots__ = ('app', 'group_name', 'members')
+class Property(Bean):
+    __slots__ = ('display_name', 'key_name', 'value', 'desc')
 
-    def __init__(self, **kwargs):
-        super(Group, self).__init__(**kwargs)
-        self.members = {}
+
+class Group():
+
+    def __init__(self, data: dict):
+        self.app = data['app']
+        self.group = data['group']
+        self.group_name = data['group_name']
+        self.desc = data['desc']
+        self.members = {KeyName[item['key']]: Member(item) for item in data['members']}
 
     def add_member(self, member: Member):
         self.members[member.key] = member
@@ -69,14 +86,14 @@ class Group(Bean):
 
 def init_setting():
     baseSetting = BaseSetting()
-    app = ConfigApp.BASE
+    with open("src/resources/properties.json", encoding="utf-8") as properties_file:
+        all_setting = json.load(properties_file)
 
-    linkGroup = Group(app=app, group_name=BaseGroupName.link) \
-        .add_member(Member(key=BaseKeyName.address, default_value="127.0.0.1:62001"))
+    print(all_setting)
+    # 迭代所有参数，进行转换
+    for group in all_setting:
+        baseSetting.setting[ConfigApp.BASE][GroupName[group["group"]]] = Group(group)
 
-    baseGroup = [linkGroup]
-    for group in baseGroup:
-        baseSetting.setting[ConfigApp.BASE][group.group_name] = group
     return baseSetting
 
 

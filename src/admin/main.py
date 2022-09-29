@@ -5,6 +5,8 @@ from src.admin.adb.client import get_adb_server_by_address
 
 if __name__ == '__main__':
     # 加载配置
-    address = baseSetting.get(BaseKeyName.address, app=ConfigApp.BASE, group=BaseGroupName.link)
+    address = baseSetting.get(KeyName.address, app=ConfigApp.BASE, group=GroupName.Simulator)
     autoHandler = BaseAutoHandler(get_adb_server_by_address(address))
+
+
 

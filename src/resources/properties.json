@@ -1,0 +1,114 @@
+[
+  {
+    "app": "BASE",
+    "group": "Simulator",
+    "group_name": "模拟器",
+    "desc": "",
+    "members": [
+      {
+        "key": "Address",
+        "title": "地址",
+        "value": "",
+        "default_value": "127.0.0.1:62001",
+        "desc": "",
+        "value_type": "str",
+        "properties": []
+      },
+      {
+        "key": "AospScreenshotEncoding",
+        "title": "模拟器截图图片编码格式",
+        "value": "auto",
+        "default_value": "auto",
+        "desc": "模拟器截图图片编码格式",
+        "value_type": "radio",
+        "properties": [
+          {
+            "display_name": "自动",
+            "key_name": "auto",
+            "desc": "自动"
+          },
+          {
+            "display_name": "raw",
+            "key_name": "raw",
+            "desc": "raw"
+          },
+          {
+            "display_name": "gzip",
+            "key_name": "gzip",
+            "desc": "gzip"
+          },
+          {
+            "display_name": "png",
+            "key_name": "png",
+            "desc": "png"
+          }
+        ]
+      },
+      {
+        "key": "ScreenshotTransport",
+        "title": "图片传输方式",
+        "value": "auto",
+        "default_value": "auto",
+        "desc": "模拟器截图图片传输方式",
+        "value_type": "radio",
+        "properties": [
+          {
+            "display_name": "自动",
+            "key_name": "auto",
+            "desc": "自动"
+          },
+          {
+            "display_name": "adb",
+            "key_name": "adb",
+            "desc": "adb"
+          },
+          {
+            "display_name": "vm_network",
+            "key_name": "vm_network",
+            "desc": "vm_network"
+          }
+        ]
+      },
+      {
+        "key": "InputMethod",
+        "title": "输入注入方式",
+        "value": "aah_agent",
+        "default_value": "aah_agent",
+        "desc": "输入注入方式",
+        "value_type": "radio",
+        "properties": [
+          {
+            "display_name": "aah_agent",
+            "key_name": "aah_agent",
+            "desc": "使用 aah-agent"
+          },
+          {
+            "display_name": "aosp_input",
+            "key_name": "aosp_input",
+            "desc": "使用 input 命令"
+          }
+        ]
+      },
+       {
+        "key": "ScreenshotMethod",
+        "title": "截图方法",
+        "value": "aah_agent",
+        "default_value": "aah_agent",
+        "desc": "截图方法",
+        "value_type": "radio",
+        "properties": [
+          {
+            "display_name": "aah_agent",
+            "key_name": "aah_agent",
+            "desc": "aah-agent：截图速度更快，且支持 wm size 动态调整分辨率，但部分模拟器不兼容（截图黑屏或卡死）"
+          },
+          {
+            "display_name": "aosp_screencap",
+            "key_name": "aosp_screencap",
+            "desc": "使用 AOSP screencap 命令，速度较慢，但兼容性好"
+          }
+        ]
+      }
+    ]
+  }
+]

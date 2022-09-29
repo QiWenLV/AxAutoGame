@@ -15,38 +15,72 @@ from random import randint
 
 import numpy as np
 
-import app
+# import app
 
-from util import cvimage
-from util.socketutil import recvall
-from .adb.revconn import ReverseConnectionHost
-from .adb.client import ADBDevice, ADBServer
-from .adb.info import ADBControllerDeviceInfo
-from .adb.agent import ControlAgentClient
+from src.admin.utils import cvimage
+from src.admin.utils.socketutil import recvall
+from revconn import ReverseConnectionHost
+from adb_service import ADBServer, ADBDevice
+from info import ADBDeviceInfo
+from agent import ControlAgentClient
+from ..config.setting import baseSetting
 
-from .types import Controller, EventAction, EventFlag, InputProtocol, ScreenshotProtocol, ControllerCapabilities
+from ..common.config_enum import ConfigApp, EventAction, EventFlag, GroupName, KeyName, \
+    ControllerCapabilities, InputMethod, ScreenshotMethod, ScreenshotTransport, AospScreencapEncoding
 
 logger = logging.getLogger(__name__)
 
-class _TouchEventsInputImpl(InputProtocol):
+class AdbOperate():
+    def get_input_capabilities(self) -> ControllerCapabilities:
+        return ControllerCapabilities(0)
     def touch_tap(self, x: int, y: int, hold_time: float = 0) -> None:
+        raise NotImplementedError
+    def touch_swipe(self, x0, y0, x1, y1, move_duration=1, hold_before_release=0, interpolation='linear'):
+        raise NotImplementedError
+    def touch_event(self, action: EventAction, x: int, y: int, pointer_id = 0) -> None:
+        raise NotImplementedError
+    def key_event(self, action: EventAction, keycode: int, metastate: int = 0) -> None:
+        raise NotImplementedError
+    def send_key(self, keycode: int, metastate: int = 0) -> None:
+        raise NotImplementedError
+    def send_text(self, text: str) -> None:
+        raise NotImplementedError
+    def close(self) -> None:
+        pass
+
+
+class _TouchEventsInputImpl(AdbOperate):
+    def touch_tap(self, x: int, y: int, hold_time: float = 0) -> None:
+        """
+        鼠标点击操作
+        :param x: 目标点x坐标
+        :param y: 目标点y坐标
+        :param hold_time: 按下到抬起的持续时间(单位：秒)
+        :return:
+        """
         self.touch_event(EventAction.DOWN, x, y)
         time.sleep(hold_time)
         self.touch_event(EventAction.UP, x, y)
+
+
     def touch_swipe(self, x0, y0, x1, y1, move_duration=1, hold_before_release=0, interpolation='linear'):
+        """
+        鼠标拖动操作
+        :param x0: 起始点x坐标
+        :param y0: 起始点y坐标
+        :param x1: 目标点x坐标
+        :param y1: 目标点y坐标
+        :param move_duration: 总操作时间(单位：秒)
+        :param hold_before_release: 操作完成后等待时间(单位：秒)
+        :param interpolation: 选择移动距离与时间关系函数的插值方法 liner：线性插值， spline：样条插值
+        :return:
+        """
         caps = self.get_input_capabilities()
         if ControllerCapabilities.LOW_LATENCY_INPUT not in caps:
             raise NotImplementedError("default implementation of touch_swipe requires low-latency input")
-        if interpolation == 'linear':
-            interpolate = lambda x: x
-        elif interpolation == 'spline':
-            import scipy.interpolate
-            xs = [0, random.uniform(0.7, 0.8), 1, 2]
-            ys = [0, random.uniform(0.9, 0.95), 1, 1]
-            tck = scipy.interpolate.splrep(xs, ys, s=0)
-            interpolate = lambda x: scipy.interpolate.splev(x, tck, der=0)
-        frame_time = 1/100
-
+        interpolate = self.select_interpolation(interpolation)
+        # 一帧的时长
+        frame_time = 1 / 100
         start_time = time.perf_counter()
         end_time = start_time + move_duration
         self.touch_event(EventAction.DOWN, x0, y0)
@@ -58,19 +92,40 @@ class _TouchEventsInputImpl(InputProtocol):
             t0 = time.perf_counter()
             if t0 > end_time:
                 break
+            # 时间比例
             time_progress = (t0 - start_time) / move_duration
+            # 移动比例
             path_progress = interpolate(time_progress)
             self.touch_event(EventAction.MOVE, int(x0 + (x1 - x0) * path_progress), int(y0 + (y1 - y0) * path_progress))
             t1 = time.perf_counter()
             step_time = t1 - t0
             if step_time < frame_time:
                 time.sleep(frame_time - step_time)
+        # 最后移动到目标位置
         self.touch_event(EventAction.MOVE, x1, y1)
         if hold_before_release > 0:
             time.sleep(hold_before_release)
         self.touch_event(EventAction.UP, x1, y1)
 
-class ShellInputAdapter(InputProtocol):
+    def select_interpolation(self, interpolation='linear'):
+        """
+        选择移动距离与时间关系函数的插值方法
+        :param interpolation:  liner：线性插值， spline：样条插值
+        :return: function函数
+        """
+        if interpolation == 'linear':
+            return lambda x: x
+        elif interpolation == 'spline':
+            from scipy.interpolate import splev, splrep
+            xs = [0, random.uniform(0.7, 0.8), 1, 2]
+            ys = [0, random.uniform(0.9, 0.95), 1, 1]
+            tck = splrep(xs, ys, s=0)
+            return lambda x: splev(x, tck, der=0)
+        else:
+            # 其他情况默认为线性插值
+            return lambda x: x
+
+class ShellInputAdapter(AdbOperate):
     def __init__(self, controller: ADBController, displayid):
         self.controller = controller
 
@@ -92,19 +147,21 @@ class ShellInputAdapter(InputProtocol):
 
     def touch_tap(self, x, y, hold_time=0):
         if hold_time > 0:
-            self.controller.adb.exec(f'{self.input_command} swipe {x} {y} {x} {y} {hold_time*1000:.0f}')
+            self.controller.adb.exec(f'{self.input_command} swipe {x} {y} {x} {y} {hold_time * 1000:.0f}')
         else:
             self.controller.adb.exec(f'{self.input_command} tap {x} {y}')
 
     def touch_swipe(self, x0, y0, x1, y1, move_duration=1, hold_before_release=0, interpolation='linear'):
         if self.support_motion_events:
             # use default implementation if `input motionevent` is supported
-            return _TouchEventsInputImpl.touch_swipe(self, x0, y0, x1, y1, move_duration, hold_before_release, interpolation)
+            return _TouchEventsInputImpl.touch_swipe(self, x0, y0, x1, y1, move_duration, hold_before_release,
+                                                     interpolation)
         if hold_before_release > 0:
-            warnings.warn('hold_before_release is not supported in shell mode, you may experience unexpected inertia scrolling')
+            warnings.warn(
+                'hold_before_release is not supported in shell mode, you may experience unexpected inertia scrolling')
         if interpolation != 'linear':
             warnings.warn('interpolation mode other than linear is not supported in shell mode')
-        self.controller.adb.exec(f'{self.input_command} swipe {x0} {y0} {x1} {y1} {move_duration*1000:.0f}')
+        self.controller.adb.exec(f'{self.input_command} swipe {x0} {y0} {x1} {y1} {move_duration * 1000:.0f}')
 
     def send_text(self, text):
         escaped_text = shlex.quote(text)
@@ -128,28 +185,22 @@ class ShellInputAdapter(InputProtocol):
     def key_event(self, action: EventAction, keycode: int, metastate: int = 0) -> None:
         raise NotImplementedError
 
+class ScreenshotProtocol():
+    def get_screenshot_capabilities(self) -> ControllerCapabilities:
+        return ControllerCapabilities(0)
+    def screenshot(self) -> cvimage.Image:
+        raise NotImplementedError
+    def close(self) -> None:
+        pass
+
 class ShellScreenshotAdapter(ScreenshotProtocol):
     def __init__(self, controller: ADBController, displayid):
         if controller.sdk_version <= 25:
             if displayid is not None and displayid != 0:
                 raise NotImplementedError('shell screenshot on this device does not support multi display')
         self.controller = controller
-        use_encoding = controller.device_config.aosp_screencap_encoding
-        use_transport = controller.device_config.screenshot_transport
+        use_encoding, use_transport = self._select_simulator_image_setting()
         pending_impl = None
-
-        if use_transport is None and controller.device_info.slow_adb_connection and controller.device_info.emulator_hypervisor:
-            use_transport = 'vm_network'
-
-        if use_encoding == 'auto':
-            if use_transport == 'vm_network':
-                use_encoding = 'raw'
-            elif controller.device_info.slow_adb_connection:
-                use_encoding = 'gzip'
-        
-        use_encoding = use_encoding or 'raw' 
-        use_transport = use_transport or 'adb'
-
         if use_transport == 'adb' and use_encoding == 'raw':
             pending_impl = self._screenshot_adb_raw
         elif use_transport == 'adb' and use_encoding == 'gzip':
@@ -175,6 +226,37 @@ class ShellScreenshotAdapter(ScreenshotProtocol):
             screenshot = self._impl()
             _check_invalid_screenshot(screenshot)
 
+    def _select_simulator_image_setting(self):
+        """
+        解析模拟器截图图片压缩格式 和 模拟器截图图片传输方式 参数
+        :param controller:
+        :return: 模拟器截图图片压缩格式, 模拟器截图图片传输方式
+        """
+        device_info = self.controller.device_info
+        # 配置文件中读取[模拟器截图图片压缩格式]和[模拟器截图图片传输方式]
+        baseSetting.select_app(ConfigApp.BASE).select_group(GroupName.Simulator)
+        use_encoding_name = baseSetting.get(KeyName.AospScreenshotEncoding)
+        use_transport_name = baseSetting.get(KeyName.ScreenshotTransport)
+
+        if use_transport_name == ScreenshotTransport.auto.name \
+                and device_info.slow_adb_connection() and device_info.emulator_hypervisor:
+            use_transport = ScreenshotTransport.vm_network
+        else:
+            use_transport = ScreenshotTransport.adb
+
+        if use_encoding_name == AospScreencapEncoding.auto.name:
+            if use_transport == ScreenshotTransport.vm_network:
+                use_encoding = AospScreencapEncoding.raw
+            elif device_info.slow_adb_connection:
+                use_encoding = AospScreencapEncoding.gzip
+            else:
+                use_encoding = AospScreencapEncoding.raw
+        else:
+            use_encoding = AospScreencapEncoding[use_encoding_name]
+        use_encoding = use_encoding or AospScreencapEncoding.raw
+        return use_encoding.name, use_transport.name
+
+
     def __repr__(self):
         return f'<{self.__class__.__name__} {self._impl.__name__}>'
 
@@ -196,7 +278,7 @@ class ShellScreenshotAdapter(ScreenshotProtocol):
         arr = arr.reshape((h, w, 4))
         im = cvimage.fromarray(arr, 'RGBA')
         if colorspace == 2:
-            from imgreco.cms import p3_to_srgb_inplace
+            from ..imgreco.cms import p3_to_srgb_inplace
             im = p3_to_srgb_inplace(im)
         return im
 
@@ -207,8 +289,9 @@ class ShellScreenshotAdapter(ScreenshotProtocol):
         if icc := img.info.get('icc_profile', ''):
             iccio = io.BytesIO(icc)
             src_profile = ImageCms.ImageCmsProfile(iccio)
-            from imgreco.cms import srgb_profile
-            ImageCms.profileToProfile(img, src_profile, srgb_profile, ImageCms.INTENT_RELATIVE_COLORIMETRIC, inPlace=True)
+            from ..imgreco.cms import srgb_profile
+            ImageCms.profileToProfile(img, src_profile, srgb_profile, ImageCms.INTENT_RELATIVE_COLORIMETRIC,
+                                      inPlace=True)
         return cvimage.from_pil(img)
 
     def _screenshot_adb_raw(self):
@@ -235,7 +318,8 @@ class ShellScreenshotAdapter(ScreenshotProtocol):
         nat_address = self.controller.device_info.nat_to_host_loopback
         rch = ReverseConnectionHost.get_instance()
         future = rch.register_cookie()
-        with self.controller.adb.exec_stream(f'(echo {future.cookie.decode()}; screencap) | {nc_command} {nat_address} {rch.port}'):
+        with self.controller.adb.exec_stream(
+                f'(echo {future.cookie.decode()}; screencap) | {nc_command} {nat_address} {rch.port}'):
             with future.result(10) as sock:
                 data = recvall(sock, 8388608, True)
         return self._decode_screencap(data)
@@ -252,6 +336,7 @@ class ShellScreenshotAdapter(ScreenshotProtocol):
     def screenshot(self):
         return self._impl()
 
+
 class AahAgentClientAdapter(_TouchEventsInputImpl, ScreenshotProtocol):
     def __init__(self, controller: ADBController, displayid):
         self.controller = controller
@@ -260,7 +345,7 @@ class AahAgentClientAdapter(_TouchEventsInputImpl, ScreenshotProtocol):
         self.client = ControlAgentClient(controller.adb, displayid)
         self.compress = controller.device_config.aah_agent_compress
         self.connection_types = {'input': 'adb'}
-        
+
     def __repr__(self):
         if self.connection_types:
             description = ''
@@ -294,41 +379,44 @@ class AahAgentClientAdapter(_TouchEventsInputImpl, ScreenshotProtocol):
             self.client.open_screenshot('adb')
             self.connection_types['screenshot'] = 'adb'
             self.display_connected = True
-    
+
     def get_input_capabilities(self) -> ControllerCapabilities:
         return ControllerCapabilities.TOUCH_EVENTS | ControllerCapabilities.MULTITOUCH_EVENTS | ControllerCapabilities.LOW_LATENCY_INPUT | ControllerCapabilities.KEYBOARD_EVENTS
-    
+
     def get_screenshot_capabilities(self) -> ControllerCapabilities:
         return ControllerCapabilities.SCREENSHOT_TIMESTAMP
 
     def touch_event(self, action: EventAction, x: int, y: int, pointer_id=0) -> None:
         return self.client.touch_event(action, x, y, pointer_id)
-    
+
     def key_event(self, action: EventAction, keycode: int, metastate: int = 0) -> None:
         return self.client.key_event(action, keycode, metastate)
-    
+
     def send_key(self, keycode: int, metastate: int = 0) -> None:
         return self.client.send_key(keycode, metastate)
-    
+
     def send_text(self, text: str) -> None:
         return self.client.send_text(text)
-    
+
     def screenshot(self) -> cvimage.Image:
         wrapped_img = self.client.screenshot(compress=self.compress, srgb=True)
         return wrapped_img.image
-    
+
     def close(self) -> None:
         if self.client is not None:
             self.client.close()
             self.client = None
+
 
 def _check_invalid_screenshot(image: cvimage.Image):
     alpha_channel: np.ndarray = image.array[..., 3]
     if np.all(alpha_channel == 0):
         raise io.UnsupportedOperation('screenshot with all pixels alpha = 0')
 
-class ADBController(Controller):
-    def __init__(self, device: ADBDevice, display_id: Optional[int] = None, preload_device_info: dict = {}, override_identifier: Optional[str] = None):
+
+class ADBController:
+    def __init__(self, device: ADBDevice, display_id: Optional[int] = None, preload_device_info: dict = {},
+                 override_identifier: Optional[str] = None):
         """
         Creates a new ADBController instance.
 
@@ -345,6 +433,7 @@ class ADBController(Controller):
         except ValueError:
             self.sdk_version = 19
         self.device_identifier = override_identifier or self._get_device_identifier()
+        # 更新驱动信息
         self._probe_quirks(preload_device_info)
 
         self.input = None
@@ -352,8 +441,10 @@ class ADBController(Controller):
 
         self._last_screenshot = None
         self._last_screenshot_expire = 0
+        baseSetting.select_app(ConfigApp.BASE).select_group(GroupName.Simulator)
 
-        if self.device_config.input_method == 'aah-agent' or self.device_config.screenshot_method == 'aah-agent':
+        if baseSetting.get(KeyName.InputMethod) == InputMethod.aah_agent.name \
+                or baseSetting.get(KeyName.ScreenshotMethod) == ScreenshotMethod.aah_agent.name:
             try:
                 agent_client = AahAgentClientAdapter(self, self.display_id)
                 if self.device_config.input_method == 'aah-agent':
@@ -365,8 +456,9 @@ class ADBController(Controller):
                         _check_invalid_screenshot(agent_client.screenshot())
                         self._screenshot_adapter = agent_client
                     except io.UnsupportedOperation:
-                        if self.device_info.emulator_hypervisor:
-                            logger.warning('当前模拟器不支持 aah-agent 截图。如果模拟器显示卡死，请重启模拟器并尝试切换渲染模式，或在设置中关闭 aah-agent 截图。', exc_info=True)
+                        if self.device_info.emulator_hypervisor():
+                            logger.warning('当前模拟器不支持 aah-agent 截图。如果模拟器显示卡死，请重启模拟器并尝试切换渲染模式，或在设置中关闭 aah-agent 截图。',
+                                           exc_info=True)
                         else:
                             logger.warning('当前设备不支持 aah-agent 截图。如果设备显示卡死，请重启设备并在设置中关闭 aah-agent 截图。', exc_info=True)
                         self.device_config.save()
@@ -396,7 +488,7 @@ class ADBController(Controller):
         android_id = self.adb.exec('settings get secure android_id').decode().strip()
         if android_id:
             return android_id
-    
+
     def __repr__(self):
         return f"<{self.__class__.__name__} adb={self.adb} device_info={dict(self.device_info._mapping)} device_config={dict(self.device_config._mapping)} _screenshot_adapter={self._screenshot_adapter} input={self.input}>"
 
@@ -404,13 +496,8 @@ class ADBController(Controller):
         return self.device_identifier
 
     def _probe_quirks(self, preload_device_info):
-        import app.device_database
-        self.device_config = app.device_database.get_device(self.device_identifier)
-
-        self.device_info = ADBControllerDeviceInfo()
-        self.device_info._set_controller(self)
-        self.device_info._mapping.update(preload_device_info)
-        self.device_info._probe_all()
+        self.device_info = ADBDeviceInfo(self.adb)
+        self.device_info.load_update(preload_device_info)
 
     @property
     def capabilities(self) -> ControllerCapabilities:
@@ -454,23 +541,22 @@ class ADBController(Controller):
         else:
             final_X = XY[0] + randint(-1, 1)
             final_Y = XY[1] + randint(-1, 1)
-        # 如果你遇到了问题，可以把这百年输出并把日志分享到群里。
         logger.debug("点击坐标:({},{})".format(final_X, final_Y))
         self.input.touch_tap(final_X, final_Y)
 
-def _test():
-    app.init()
-    logging.basicConfig(level=logging.NOTSET, force=True)
-    print('foo')
-    t0 = time.perf_counter()
-    dev = ADBServer.DEFAULT.get_device('127.0.0.1:59119')
-
-    print(dev.exec('uname -a').decode())
-    ctrl = ADBController(dev, override_identifier='BlueStacks:Nougat64_nxt22222')
-    t1 = time.perf_counter()
-    print(f"initialization take {t1-t0:.3f} s")
-    import IPython
-    IPython.embed(colors='neutral')
-
-if __name__ == '__main__':
-    _test()
+# def _test():
+#     app.init()
+#     logging.basicConfig(level=logging.NOTSET, force=True)
+#     print('foo')
+#     t0 = time.perf_counter()
+#     dev = ADBServer.DEFAULT.get_device('127.0.0.1:59119')
+#
+#     print(dev.exec('uname -a').decode())
+#     ctrl = ADBController(dev, override_identifier='BlueStacks:Nougat64_nxt22222')
+#     t1 = time.perf_counter()
+#     print(f"initialization take {t1-t0:.3f} s")
+#     import IPython
+#     IPython.embed(colors='neutral')
+#
+# if __name__ == '__main__':
+#     _test()
